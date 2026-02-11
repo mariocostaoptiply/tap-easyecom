@@ -16,8 +16,7 @@ class EasyEcomStream(RESTStream):
     """EasyEcom stream class."""
 
     records_jsonpath = "$.data[*]"
-    # limit is maxed out at 10 :/
-    page_size = 10
+    page_size = None
 
     def get_next_page_token(
         self, response, previous_token
