@@ -1,4 +1,5 @@
 """freshbooks Authentication."""
+
 from singer_sdk.authenticators import APIAuthenticatorBase
 from singer_sdk.streams import Stream as RESTStreamBase
 from typing import Optional
@@ -34,9 +35,7 @@ class BearerTokenAuthenticator(APIAuthenticatorBase):
         if not self.is_token_valid():
             self.update_access_token()
         result = super().auth_headers
-        result[
-            "Authorization"
-        ] = f"Bearer {self._tap._config.get('access_token')}"
+        result["Authorization"] = f"Bearer {self._tap._config.get('access_token')}"
         return result
 
     @property
@@ -64,9 +63,7 @@ class BearerTokenAuthenticator(APIAuthenticatorBase):
 
     def is_token_valid(self) -> bool:
         now = round(datetime.utcnow().timestamp())
-        created_at = self._tap._config.get(
-            "created_at", 0
-        )
+        created_at = self._tap._config.get("created_at", 0)
 
         return now < (created_at + self.expires_in - 60)
 
@@ -78,7 +75,15 @@ class BearerTokenAuthenticator(APIAuthenticatorBase):
             RuntimeError: When OAuth login fails.
         """
         auth_request_payload = self.request_body
-        token_response = requests.post(self.auth_endpoint, data=auth_request_payload)
+        headers = {}
+        api_key = self.config.get("x_api_key") or self.config.get("x-api-key")
+        if api_key:
+            headers["x-api-key"] = api_key
+        token_response = requests.post(
+            self.auth_endpoint,
+            data=auth_request_payload,
+            headers=headers,
+        )
         try:
             token_last_refreshed = round(datetime.utcnow().timestamp())
             token_response.raise_for_status()

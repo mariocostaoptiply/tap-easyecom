@@ -1,4 +1,5 @@
 """REST client handling, including EasyEcomStream base class."""
+
 from typing import Callable, Iterable
 from singer_sdk.exceptions import RetriableAPIError
 from urllib.parse import urlparse, parse_qs
@@ -12,15 +13,14 @@ from pendulum import parse
 import backoff
 import requests
 
+
 class EasyEcomStream(RESTStream):
     """EasyEcom stream class."""
 
     records_jsonpath = "$.data[*]"
     page_size = None
 
-    def get_next_page_token(
-        self, response, previous_token
-    ):
+    def get_next_page_token(self, response, previous_token):
         """Return a token for identifying next page or None if no more pages."""
         res_json = response.json()
         next_url = res_json.get("nextUrl")
@@ -29,7 +29,7 @@ class EasyEcomStream(RESTStream):
             next_url = res_json.get("data", {}).get("nextUrl")
 
         if next_url:
-            return parse_qs(urlparse(next_url).query)['cursor']
+            return parse_qs(urlparse(next_url).query)["cursor"]
 
         return None
 
@@ -48,6 +48,11 @@ class EasyEcomStream(RESTStream):
         headers = {}
         if "user_agent" in self.config:
             headers["User-Agent"] = self.config.get("user_agent")
+
+        api_key = self.config.get("x_api_key") or self.config.get("x-api-key")
+        if api_key:
+            headers["x-api-key"] = api_key
+
         return headers
 
     def get_starting_time(self, context):
@@ -57,7 +62,7 @@ class EasyEcomStream(RESTStream):
         rep_key = self.get_starting_timestamp(context)
         return rep_key or start_date
 
-    def get_url_params(self,context,next_page_token):
+    def get_url_params(self, context, next_page_token):
         params: dict = {}
         if next_page_token:
             params["cursor"] = next_page_token
@@ -67,8 +72,12 @@ class EasyEcomStream(RESTStream):
             params.update(self.additional_params)
         if self.replication_key:
             start_date = self.get_starting_time(context)
-            date_filter = self.date_filter_param if hasattr(self, "date_filter_param") else "updated_after"
-            params[date_filter] = start_date.strftime('%Y-%m-%d %H:%M:%S')
+            date_filter = (
+                self.date_filter_param
+                if hasattr(self, "date_filter_param")
+                else "updated_after"
+            )
+            params[date_filter] = start_date.strftime("%Y-%m-%d %H:%M:%S")
         return params
 
     def _write_state_message(self) -> None:
@@ -96,20 +105,20 @@ class EasyEcomStream(RESTStream):
             on_backoff=self.backoff_handler,
         )(func)
         return decorator
-    
+
     def post_process(self, row: dict, context: dict) -> dict:
         """Convert string numbers to float and handle NA values."""
         for key, value in row.items():
             # Handle actual null values
             if value is None:
                 continue  # Already None, no need to change
-            
+
             if isinstance(value, str):
                 # Handle NA values
-                if value.upper() in ['NA', 'N/A', 'NULL', 'NONE', '']:
+                if value.upper() in ["NA", "N/A", "NULL", "NONE", ""]:
                     row[key] = None
                     continue
-                
+
                 # Convert string numbers to float
                 field_types = self.schema.get("properties", {}).get(key, {}).get("type")
                 if field_types and "number" in field_types:
@@ -119,10 +128,9 @@ class EasyEcomStream(RESTStream):
                         self.logger.debug(f"Parsing {key}={value} failed")
                         raise ValueError(f"Parsing {key}={value} failed")
         return row
-    
+
     def parse_response(self, response) -> Iterable[dict]:
         if response.json().get("data") == "No Data Found":
             yield from []
         else:
             yield from super().parse_response(response)
-    

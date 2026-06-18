@@ -42,7 +42,12 @@ class TapEasyEcom(Tap):
 
     # TODO: Update this section with the actual config values you expect:
     config_jsonschema = th.PropertiesList(
-        th.Property("start_date", th.DateTimeType,),
+        th.Property(
+            "start_date",
+            th.DateTimeType,
+        ),
+        th.Property("x_api_key", th.StringType),
+        th.Property("x-api-key", th.StringType),
     ).to_dict()
 
     def discover_streams(self):
