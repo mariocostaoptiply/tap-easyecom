@@ -55,32 +55,11 @@ class EasyEcomStream(RESTStream):
         if "user_agent" in self.config:
             headers["User-Agent"] = self.config.get("user_agent")
 
-        # EasyEcom appears to apply a stricter API Gateway rate limit when
-        # x-api-key is present on data requests. Prefer bearer-token auth only,
-        # and add x-api-key later only if the endpoint rejects the request.
+        api_key = self.config.get("x_api_key") or self.config.get("x-api-key")
+        if api_key:
+            headers["x-api-key"] = api_key
+
         return headers
-
-    @property
-    def api_key(self) -> str:
-        return self.config.get("x_api_key") or self.config.get("x-api-key") or ""
-
-    def _request_with_api_key(
-        self, prepared_request: requests.PreparedRequest
-    ) -> requests.PreparedRequest:
-        api_key = self.api_key
-        if not api_key:
-            return prepared_request
-
-        retry_request = prepared_request.copy()
-        retry_request.headers["x-api-key"] = api_key
-        return retry_request
-
-    def _request_without_api_key(
-        self, prepared_request: requests.PreparedRequest
-    ) -> requests.PreparedRequest:
-        retry_request = prepared_request.copy()
-        retry_request.headers.pop("x-api-key", None)
-        return retry_request
 
     def _send_prepared_request(
         self, prepared_request: requests.PreparedRequest, context: Optional[dict]
@@ -101,24 +80,7 @@ class EasyEcomStream(RESTStream):
     def _request(
         self, prepared_request: requests.PreparedRequest, context: Optional[dict]
     ) -> requests.Response:
-        sent_request = prepared_request
-        response = self._send_prepared_request(sent_request, context)
-
-        if response.status_code == 403 and self.api_key:
-            self.logger.info(
-                "Request returned 403 without x-api-key; retrying once with x-api-key."
-            )
-            sent_request = self._request_with_api_key(prepared_request)
-            response = self._send_prepared_request(sent_request, context)
-
-        if response.status_code == 429 and "x-api-key" in sent_request.headers:
-            self.logger.info(
-                "Request returned 429 with x-api-key; retrying once without x-api-key."
-            )
-            response = self._send_prepared_request(
-                self._request_without_api_key(sent_request), context
-            )
-
+        response = self._send_prepared_request(prepared_request, context)
         self.validate_response(response)
         return response
 
