@@ -6,6 +6,8 @@ from typing import Any, Callable, ClassVar, Iterable, Optional, cast
 from singer_sdk.exceptions import RetriableAPIError
 from urllib.parse import urlparse, parse_qs
 from functools import cached_property
+import threading
+import time
 import singer
 from singer import StateMessage
 from singer_sdk.streams import RESTStream
@@ -23,6 +25,9 @@ class EasyEcomStream(RESTStream):
     page_size = None
     additional_params: ClassVar[dict[str, Any]] = {}
     date_filter_param = "updated_after"
+    _min_request_interval_seconds: ClassVar[float] = 0.21
+    _last_request_at: ClassVar[float] = 0.0
+    _request_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def get_next_page_token(self, response, previous_token):
         """Return a token for identifying next page or None if no more pages."""
@@ -61,9 +66,22 @@ class EasyEcomStream(RESTStream):
 
         return headers
 
+    def _throttle_request(self) -> None:
+        """Throttle EasyEcom API calls to stay under 5 requests per second."""
+        with self._request_lock:
+            now = time.monotonic()
+            wait_seconds = self._min_request_interval_seconds - (
+                now - self._last_request_at
+            )
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+                now = time.monotonic()
+            self.__class__._last_request_at = now
+
     def _send_prepared_request(
         self, prepared_request: requests.PreparedRequest, context: Optional[dict]
     ) -> requests.Response:
+        self._throttle_request()
         response = self.requests_session.send(prepared_request, timeout=self.timeout)
         if self._LOG_REQUEST_METRICS:
             extra_tags = {}
