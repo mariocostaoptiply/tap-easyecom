@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -52,6 +53,56 @@ def test_receipts_cache_only_unfinished_grns() -> None:
     )
 
     assert tap.open_grn_ids_cache == {"101", "103"}
+
+
+def test_receipts_replays_last_hotglue_day_after_a_gap() -> None:
+    """A stale HotGlue timestamp should replay its full UTC day."""
+    now = datetime.now(timezone.utc)
+    last_modified = now - timedelta(days=1)
+    tap = make_tap(
+        {
+            "hg_last_modified": last_modified.isoformat(),
+            "bookmarks": {
+                "receipts": {
+                    "replication_key": "grn_created_at",
+                    "replication_key_value": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "starting_replication_value": now.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                }
+            },
+        }
+    )
+
+    params = ReceiptsStream(cast("Any", tap)).get_url_params(None, None)
+
+    assert params["created_after"] == last_modified.strftime("%Y-%m-%d 00:00:00")
+
+
+def test_receipts_keeps_bookmark_when_hotglue_ran_today() -> None:
+    """A same-day HotGlue timestamp should not change the receipt cursor."""
+    now = datetime.now(timezone.utc)
+    bookmark = now.replace(hour=13, minute=53, second=17, microsecond=0)
+    tap = make_tap(
+        {
+            "hg_last_modified": now.isoformat(),
+            "bookmarks": {
+                "receipts": {
+                    "replication_key": "grn_created_at",
+                    "replication_key_value": bookmark.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    "starting_replication_value": bookmark.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                }
+            },
+        }
+    )
+
+    params = ReceiptsStream(cast("Any", tap)).get_url_params(None, None)
+
+    assert params["created_after"] == bookmark.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def test_open_receipts_uses_grn_ids_without_created_after() -> None:

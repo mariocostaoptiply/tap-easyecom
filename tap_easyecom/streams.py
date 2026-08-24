@@ -410,6 +410,25 @@ class ReceiptsStream(EasyEcomStream):
     replication_key = "grn_created_at"
     date_filter_param = "created_after"
 
+    def get_starting_time(self, context: dict | None) -> datetime:
+        """Replay receipts from HotGlue's last active day after a job gap."""
+        starting_time = super().get_starting_time(context)
+        hg_last_modified = (self.tap_state or {}).get("hg_last_modified")
+        if not hg_last_modified:
+            return starting_time
+
+        try:
+            last_modified = datetime.fromisoformat(
+                hg_last_modified.replace("Z", "+00:00")
+            )
+        except (AttributeError, TypeError, ValueError):
+            self.logger.warning("Invalid hg_last_modified; using receipts bookmark")
+            return starting_time
+
+        if last_modified.date() < datetime.now(pytz.UTC).date():
+            return last_modified.replace(hour=0, minute=0, second=0, microsecond=0)
+        return starting_time
+
     schema = th.PropertiesList(
         th.Property("grn_id", th.IntegerType),
         th.Property("grn_invoice_number", th.StringType),
