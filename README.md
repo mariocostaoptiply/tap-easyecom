@@ -45,6 +45,13 @@ tap is available by running:
 tap-easyecom --about
 ```
 
+### Receipt lookback
+
+After the first run, the `receipts` stream requests records from 12 hours before
+its stored `grn_created_at` bookmark. The persisted bookmark remains at its
+high-water mark; the overlap only changes the EasyEcom request window. Consumers
+must therefore continue deduplicating receipt details by their EasyEcom IDs.
+
 ### Configure using environment variables
 
 This Singer tap will automatically import any environment variables within the working directory's

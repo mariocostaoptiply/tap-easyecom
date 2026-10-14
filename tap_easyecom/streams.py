@@ -411,23 +411,11 @@ class ReceiptsStream(EasyEcomStream):
     date_filter_param = "created_after"
 
     def get_starting_time(self, context: dict | None) -> datetime:
-        """Replay receipts from HotGlue's last active day after a job gap."""
-        starting_time = super().get_starting_time(context)
-        hg_last_modified = (self.tap_state or {}).get("hg_last_modified")
-        if not hg_last_modified:
-            return starting_time
-
-        try:
-            last_modified = datetime.fromisoformat(
-                hg_last_modified.replace("Z", "+00:00")
-            )
-        except (AttributeError, TypeError, ValueError):
-            self.logger.warning("Invalid hg_last_modified; using receipts bookmark")
-            return starting_time
-
-        if last_modified.date() < datetime.now(pytz.UTC).date():
-            return last_modified.replace(hour=0, minute=0, second=0, microsecond=0)
-        return starting_time
+        """Read a 12-hour overlap without moving the persisted bookmark back."""
+        bookmark = self.get_starting_timestamp(context)
+        if bookmark is None:
+            return super().get_starting_time(context)
+        return bookmark - timedelta(hours=12)
 
     schema = th.PropertiesList(
         th.Property("grn_id", th.IntegerType),
