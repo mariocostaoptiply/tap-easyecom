@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar
 
 from singer_sdk import typing as th
 from tap_easyecom.client import EasyEcomStream
@@ -17,10 +16,8 @@ from singer_sdk.helpers._state import (
 )
 
 
-class _OpenGrnCacheTap(Protocol):
-    """Tap surface shared by receipt discovery and replay streams."""
-
-    open_grn_ids_cache: set[str]
+if TYPE_CHECKING:
+    from singer_sdk.helpers._singer import Catalog
 
 
 class ProductsStream(EasyEcomStream):
@@ -402,18 +399,28 @@ class BuyOrdersStream(EasyEcomStream):
 
 
 class ReceiptsStream(EasyEcomStream):
-    """Fetch GRNs created after the receipts stream bookmark."""
+    """Fetch new and modified GRNs regardless of completion status."""
 
     name = "receipts"
     path = "/Grn/V2/getGrnDetails"
     primary_keys: ClassVar[list[str]] = ["grn_id"]
-    replication_key = "grn_created_at"
-    date_filter_param = "created_after"
+    replication_key = "grn_updated_at"
+    date_filter_param = "lastupdate_after"
+
+    def apply_catalog(self, catalog: Catalog) -> None:
+        """Reject catalogs that would restore creation-based replication."""
+        super().apply_catalog(catalog)
+        if self.replication_key != "grn_updated_at":
+            msg = (
+                "Receipts require grn_updated_at; regenerate the catalog before syncing."
+            )
+            raise ValueError(msg)
 
     def get_starting_time(self, context: dict | None) -> datetime:
-        """Read a 12-hour overlap without moving the persisted bookmark back."""
+        """Overlap a stored modification bookmark, not the initial start date."""
         bookmark = self.get_starting_timestamp(context)
-        if bookmark is None:
+        state = self.get_context_state(context)
+        if bookmark is None or state.get("replication_key") != self.replication_key:
             return super().get_starting_time(context)
         return bookmark - timedelta(hours=12)
 
@@ -424,6 +431,7 @@ class ReceiptsStream(EasyEcomStream):
         th.Property("grn_status_id", th.IntegerType),
         th.Property("grn_status", th.StringType),
         th.Property("grn_created_at", th.DateTimeType),
+        th.Property("grn_updated_at", th.DateTimeType),
         th.Property("grn_invoice_date", th.DateType),
         th.Property("po_id", th.IntegerType),
         th.Property("po_number", th.IntegerType),
@@ -437,82 +445,6 @@ class ReceiptsStream(EasyEcomStream):
         th.Property("vendor_c_id", th.IntegerType),
         th.Property("grn_items", th.CustomType({"type": ["array", "string"]})),
     ).to_dict()
-
-    @staticmethod
-    def is_completed(record: dict[str, Any]) -> bool:
-        """Return whether EasyEcom reports the GRN status as completed."""
-        status_name = str(record.get("grn_status") or "").strip().lower()
-        return status_name == "completed"
-
-    def post_process(
-        self, row: dict[str, Any], context: dict | None = None
-    ) -> dict[str, Any]:
-        """Normalize a GRN and cache unfinished IDs for the follow-up stream."""
-        row = super().post_process(row, context)
-        grn_id = row.get("grn_id")
-        if grn_id is not None and not self.is_completed(row):
-            tap = cast("_OpenGrnCacheTap", self._tap)
-            tap.open_grn_ids_cache.add(str(grn_id))
-        return row
-
-
-class OpenReceiptsStream(ReceiptsStream):
-    """Refresh unfinished GRNs until EasyEcom marks them completed."""
-
-    name = "open_receipts"
-    replication_key = None
-    batch_size: ClassVar[int] = 10
-
-    def post_process(
-        self, row: dict[str, Any], context: dict | None = None
-    ) -> dict[str, Any]:
-        """Normalize replayed GRNs without adding them to the discovery cache."""
-        return EasyEcomStream.post_process(self, row, context)
-
-    def get_url_params(
-        self, context: dict | None, next_page_token: list[str] | None
-    ) -> dict[str, Any]:
-        """Request only the GRN IDs assigned to the current replay batch."""
-        params = super().get_url_params(context, next_page_token)
-        grn_ids = (context or {}).get("grn_ids", [])
-        if grn_ids:
-            params["grn_ids"] = ",".join(str(grn_id) for grn_id in grn_ids)
-        return params
-
-    def get_records(
-        self, context: dict | None
-    ) -> Iterable[dict[str, Any]]:
-        """Refresh cached GRNs and persist only IDs that remain unfinished."""
-        del context
-        state_ids = self.stream_state.get("grn_ids", [])
-        tap = cast("_OpenGrnCacheTap", self._tap)
-        cached_ids = tap.open_grn_ids_cache
-        requested_ids = {str(grn_id) for grn_id in state_ids}
-        requested_ids.update(str(grn_id) for grn_id in cached_ids)
-
-        if not requested_ids:
-            self.stream_state["grn_ids"] = []
-            return
-
-        remaining_ids = set(requested_ids)
-        self.stream_state["grn_ids"] = sorted(remaining_ids)
-        ordered_ids = sorted(requested_ids)
-
-        for offset in range(0, len(ordered_ids), self.batch_size):
-            batch = ordered_ids[offset : offset + self.batch_size]
-            for record in super().get_records({"grn_ids": batch}):
-                grn_id = record.get("grn_id")
-                yield record
-                if grn_id is not None:
-                    normalized_id = str(grn_id)
-                    if self.is_completed(record):
-                        remaining_ids.discard(normalized_id)
-                    else:
-                        remaining_ids.add(normalized_id)
-                    self.stream_state["grn_ids"] = sorted(remaining_ids)
-
-        self.stream_state["grn_ids"] = sorted(remaining_ids)
-        cached_ids.clear()
 
 
 class ReturnsStream(EasyEcomStream):

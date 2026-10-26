@@ -45,12 +45,40 @@ tap is available by running:
 tap-easyecom --about
 ```
 
-### Receipt lookback
+### Receipt replication
 
-After the first run, the `receipts` stream requests records from 12 hours before
-its stored `grn_created_at` bookmark. The persisted bookmark remains at its
-high-water mark; the overlap only changes the EasyEcom request window. Consumers
-must therefore continue deduplicating receipt details by their EasyEcom IDs.
+`receipts` requests new and modified GRNs from `/Grn/V2/getGrnDetails` using
+`lastupdate_after` and stores `grn_updated_at` as its replication key.
+Completed GRNs remain eligible when edited; `grn_created_at` remains in the
+schema but no longer drives extraction. The `open_receipts` stream and its
+unfinished-GRN queue have been removed.
+
+The first run uses `start_date`. Subsequent runs request a 12-hour overlap before
+the stored modification bookmark without subtracting from the bookmark itself.
+Consumers must continue upserting GRNs by `grn_id` and deduplicating receipt
+details by their EasyEcom IDs.
+
+#### Existing-job cutover
+
+1. Stop the old job before switching its tap version.
+2. Regenerate the Singer catalog with `tap-easyecom --config config.json --discover`.
+   Retain the intended selections, select `receipts`, and remove any
+   `open_receipts` selection or downstream stream mapping. Creation-based receipt
+   catalogs are rejected rather than silently restoring the old cursor.
+3. Back up the job state. Clear only `bookmarks.receipts` and remove the obsolete
+   `bookmarks.open_receipts` entry; preserve every other stream's state.
+   Do not relabel a `grn_created_at` bookmark as `grn_updated_at`. If an old
+   creation bookmark is supplied, the SDK ignores it and starts from `start_date`.
+4. Set `start_date` to cover the required historical modification window and run
+   a deliberate replay. A recent date will not recover earlier missed edits.
+   Verify receipt upserts and the emitted `grn_updated_at` bookmark before
+   resuming the schedule.
+
+The source must populate `grn_updated_at` for new GRNs and advance it for
+relevant edits, including receipt-item changes and edits to completed GRNs.
+The 12-hour overlap only covers source visibility delays within that window.
+Validate these provider guarantees and modification-filter pagination on the
+intended tenant before cutover; local tests use synthetic HTTP responses.
 
 ### Configure using environment variables
 
